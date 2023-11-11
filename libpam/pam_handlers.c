@@ -776,10 +776,10 @@ _pam_load_module(pam_handle_t *pamh, const char *mod_path, int handler_type)
     return success == PAM_SUCCESS ? mod : NULL;
 }
 
-int _pam_add_handler(pam_handle_t *pamh
-		     , int handler_type, int other, int stack_level, int type
-		     , int *actions, const char *mod_path
-		     , int argc, char **argv, int argvlen)
+static int _pam_add_handler(pam_handle_t *pamh
+			    , int handler_type, int other, int stack_level
+			    , int type, int *actions, const char *mod_path
+			    , int argc, char **argv, int argvlen)
 {
     struct loaded_module *mod = NULL;
     struct handler **handler_p;
