@@ -87,3 +87,8 @@ LIBPAM_MODUTIL_1.4.1 {
   global:
     pam_modutil_check_user_in_passwd;
 } LIBPAM_MODUTIL_1.3.2;
+
+LIBPAM_MODUTIL_1.5.4 {
+  global:
+    pam_getline;
+} LIBPAM_MODUTIL_1.4.1;

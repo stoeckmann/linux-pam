@@ -50,6 +50,7 @@ extern "C" {
 
 #include <security/_pam_types.h>
 #include <stdarg.h>
+#include <stdio.h>
 
 extern void PAM_FORMAT((printf, 3, 0)) PAM_NONNULL((3))
 pam_vsyslog (const pam_handle_t *pamh, int priority,
@@ -83,6 +84,9 @@ pam_get_authtok_noverify (pam_handle_t *pamh, const char **authtok,
 extern int PAM_NONNULL((1,2))
 pam_get_authtok_verify (pam_handle_t *pamh, const char **authtok,
 			const char *prompt);
+
+extern ssize_t PAM_NONNULL((1,2,3))
+pam_getline(char **buf, size_t *buflen, FILE *fp);
 
 #ifdef __cplusplus
 }
