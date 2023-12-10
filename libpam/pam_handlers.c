@@ -18,14 +18,23 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#define BUF_SIZE                  1024
 #define MODULE_CHUNK              4
 #define UNKNOWN_MODULE       "<*unknown module*>"
 #ifndef _PAM_ISA
 #define _PAM_ISA "."
 #endif
 
-static int _pam_assemble_line(FILE *f, char *buf, int buf_len);
+struct line_buffer {
+	char *assembled;
+	char *chunk;
+	size_t chunk_size;
+	size_t len;
+	size_t size;
+};
+
+static void _pam_buffer_init(struct line_buffer *buffer);
+
+static int _pam_assemble_line(FILE *f, struct line_buffer *buf);
 
 static void _pam_free_handlers_aux(struct handler **hp);
 
@@ -62,12 +71,15 @@ static int _pam_parse_conf_file(pam_handle_t *pamh, FILE *f
 #endif /* PAM_READ_BOTH_CONFS */
     )
 {
-    char buf[BUF_SIZE];
+    struct line_buffer buffer;
     int x;                    /* read a line from the FILE *f ? */
+
+    _pam_buffer_init(&buffer);
     /*
      * read a line from the configuration (FILE *) f
      */
-    while ((x = _pam_assemble_line(f, buf, BUF_SIZE)) > 0) {
+    while ((x = _pam_assemble_line(f, &buffer)) > 0) {
+	char *buf = buffer.assembled;
 	char *tok, *nexttok=NULL;
 	const char *this_service;
 	const char *mod_path;
@@ -571,92 +583,165 @@ int _pam_init_handlers(pam_handle_t *pamh)
     return PAM_SUCCESS;
 }
 
+static int _pam_buffer_add(struct line_buffer *buffer, char *start, char *end)
+{
+    size_t len = end - start;
+
+    D(("assembled: [%zu/%zu] '%s', adding [%zu] '%s'",
+	buffer->len, buffer->size,
+	buffer->assembled == NULL ? "" : buffer->assembled, len, start));
+
+    if (buffer->assembled == NULL && buffer->chunk == start) {
+	/* no extra allocation needed, just move chunk to assembled */
+	buffer->assembled = buffer->chunk;
+	buffer->len = len;
+	buffer->size = buffer->chunk_size;
+
+	buffer->chunk = NULL;
+	buffer->chunk_size = 0;
+
+	D(("exiting with quick exchange"));
+	return 0;
+    }
+
+    if (buffer->len + len + 1 > buffer->size) {
+	size_t size;
+	char *p;
+
+	size = buffer->len + len + 1;
+	if ((p = realloc(buffer->assembled, size)) == NULL)
+		return -1;
+
+	buffer->assembled = p;
+	buffer->size = size;
+    }
+
+    memcpy(buffer->assembled + buffer->len, start, len);
+    buffer->len += len;
+    buffer->assembled[buffer->len] = '\0';
+
+    D(("exiting"));
+    return 0;
+}
+
+static void _pam_buffer_clear(struct line_buffer *buffer)
+{
+    _pam_drop(buffer->assembled);
+    _pam_drop(buffer->chunk);
+    buffer->chunk_size = 0;
+    buffer->len = 0;
+    buffer->size = 0;
+}
+
+static void _pam_buffer_init(struct line_buffer *buffer)
+{
+    buffer->assembled = NULL;
+    buffer->chunk = NULL;
+    _pam_buffer_clear(buffer);
+}
+
+static void _pam_buffer_purge(struct line_buffer *buffer)
+{
+    _pam_drop(buffer->chunk);
+    buffer->chunk_size = 0;
+}
+
+static void _pam_buffer_shift(struct line_buffer *buffer)
+{
+    _pam_buffer_purge(buffer);
+    buffer->chunk = buffer->assembled;
+    buffer->chunk_size = buffer->size;
+
+    buffer->assembled = NULL;
+    buffer->size = 0;
+    buffer->len = 0;
+}
+
 /*
  * This is where we read a line of the PAM config file. The line may be
  * preceded by lines of comments and also extended with "\\\n"
  */
 
-static int _pam_assemble_line(FILE *f, char *buffer, int buf_len)
+static int _pam_assemble_line(FILE *f, struct line_buffer *buffer)
 {
-    char *p = buffer;
-    char *endp = buffer + buf_len;
-    char *s, *os;
     int used = 0;
 
     /* loop broken with a 'break' when a non-'\\n' ended line is read */
 
     D(("called."));
+
+    _pam_buffer_shift(buffer);
+
     for (;;) {
-	if (p >= endp - 1) {
-	    /* Overflow */
-	    D(("overflow"));
-	    return -1;
-	}
-	if (fgets(p, endp - p, f) == NULL) {
+	char *s, *os;
+	ssize_t n;
+
+	if ((n = pam_getline(&buffer->chunk, &buffer->chunk_size, f)) == -1) {
 	    if (used) {
 		/* Incomplete read */
-		return -1;
+		used = -1;
 	    } else {
 		/* EOF */
-		return 0;
+		used = 0;
 	    }
+	    break;
 	}
 
-	if (strchr(p, '\n') == NULL && !feof(f)) {
-	    /* Incomplete */
-	    D(("_pam_assemble_line: incomplete"));
-	    return -1;
-	}
+	/* skip leading spaces */
 
-	/* skip leading spaces --- line may be blank */
+	os = s = buffer->chunk + strspn(buffer->chunk, " \t");
 
-	s = p + strspn(p, " \n\t");
-	if (*s && (*s != '#')) {
-	    os = s;
+	/*
+	 * we are only interested in characters before the first '#'
+	 * character
+	 */
 
-	    /*
-	     * we are only interested in characters before the first '#'
-	     * character
-	     */
+	s = buffer->chunk + strcspn(buffer->chunk, "#");
+	if (*s == '#')
+	    *s = '\0';
 
-	    while (*s && *s != '#')
-		 ++s;
-	    if (*s == '#') {
-		 *s = '\0';
-		 used += strlen(os);
-		 break;                /* the line has been read */
-	    }
+	/*
+	 * Check for backslash by scanning back from the end of
+	 * the entered line, the '\n' should be included since
+	 * normally a line is terminated with this character.
+	 */
 
-	    s = os;
+	s = buffer->chunk + n;
+	while (s > os && ((*--s == ' ') || (*s == '\t') || (*s == '\n')));
 
-	    /*
-	     * Check for backslash by scanning back from the end of
-	     * the entered line, the '\n' has been included since
-	     * normally a line is terminated with this
-	     * character. fgets() should only return one though!
-	     */
-
-	    s += strlen(s);
-	    while (s > os && ((*--s == ' ') || (*s == '\t')
-			      || (*s == '\n')));
-
-	    /* check if it ends with a backslash */
-	    if (*s == '\\') {
-		*s++ = ' ';             /* replace backslash with ' ' */
-		*s = '\0';              /* truncate the line here */
-		used += strlen(os);
-		p = s;                  /* there is more ... */
-	    } else {
-		/* End of the line! */
-		used += strlen(os);
-		break;                  /* this is the complete line */
-	    }
-
+	/* check if it ends with a backslash */
+	if (*s == '\\') {
+	    if (buffer->assembled != NULL)
+		*s++ = ' ';         /* replace backslash with ' ' */
+	    *s = '\0';              /* truncate the line here */
+	    if (os != s) {
+		if (_pam_buffer_add(buffer, os, s)) {
+		    used = -1;
+		    break;
+		}
+		used = 1;
+	    }                       /* there is more ... */
 	} else {
-	    /* Nothing in this line */
-	    /* Don't move p         */
+	    /* End of the line! */
+	    if (buffer->assembled != NULL || (*os != '\0' && *os != '\n')) {
+		if (_pam_buffer_add(buffer, os, buffer->chunk + n))
+		    used = -1;
+		else if (buffer->assembled[0] != '\0') {
+		    used = 1;
+		    break;          /* this is the complete line */
+		}
+	    }
+
+	    /* Nothing useful left */
+	    _pam_buffer_shift(buffer);
+	    used = 0;
 	}
     }
+
+    if (used == 1)
+	_pam_buffer_purge(buffer);
+    else
+	_pam_buffer_clear(buffer);
 
     return used;
 }
