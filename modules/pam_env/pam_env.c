@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <pwd.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -281,29 +282,50 @@ econf_read_file(const pam_handle_t *pamh, const char *filename, const char *deli
 }
 
 #else
+static int add(char **buffer, size_t *buffersize, char *append,
+	       size_t appendsize)
+{
+	char *p;
+	size_t len;
+	if (*buffersize > SIZE_MAX - appendsize)
+	    return -1;
+	len = *buffersize + appendsize + 1;
+	if ((p = realloc(*buffer, len)) == NULL)
+	    return -1;
+	if (*buffer == NULL)
+	    p[0] = '\0';
+	*buffer = p;
+	memcpy(*buffer + *buffersize, append, appendsize);
+	(*buffer)[len - 1] = '\0';
+	*buffersize = len;
+	return 0;
+}
 
 /*
  * This is where we read a line of the PAM config file. The line may be
  * preceded by lines of comments and also extended with "\\\n"
  */
 static int
-_assemble_line(FILE *f, char *buffer, int buf_len)
+_assemble_line(FILE *f, char **buffer, size_t *buffersize)
 {
-    char *p = buffer;
-    char *s, *os;
     int used = 0;
-    int whitespace;
 
     /* loop broken with a 'break' when a non-'\\n' ended line is read */
 
     D(("called."));
+
+    _pam_overwrite_n(*buffer, *buffersize);
+    _pam_drop(*buffer);
+    *buffersize = 0;
     for (;;) {
-	if (used >= buf_len) {
-	    /* Overflow */
-	    D(("overflow"));
-	    return -1;
-	}
-	if (fgets(p, buf_len - used, f) == NULL) {
+	char *end, *s, *os;
+	char *p = NULL;
+	size_t n = 0;
+	ssize_t r;
+	size_t whitespace;
+	if ((r = pam_getline(&p, &n, f)) < 1) {
+	    free(p);
+	    _pam_drop(*buffer);
 	    if (used) {
 		/* Incomplete read */
 		return -1;
@@ -314,12 +336,13 @@ _assemble_line(FILE *f, char *buffer, int buf_len)
 	}
 	if (p[0] == '\0') {
 	    D(("corrupted or binary file"));
+	    free(p);
+	    _pam_overwrite_n(*buffer, *buffersize);
+	    _pam_drop(*buffer);
+	    *buffersize = 0;
 	    return -1;
 	}
-	if (p[strlen(p)-1] != '\n' && !feof(f)) {
-	    D(("line too long"));
-	    return -1;
-	}
+	end = p + r;
 
 	/* skip leading spaces --- line may be blank */
 
@@ -338,7 +361,11 @@ _assemble_line(FILE *f, char *buffer, int buf_len)
 		 ++s;
 	    if (*s == '#') {
 		 *s = '\0';
-		 used += strlen(os);
+		 if (add(buffer, buffersize, os, end - os))
+		     used = 0;
+		 else
+		     used = 1;
+		 free(p);
 		 break;                /* the line has been read */
 	    }
 
@@ -348,7 +375,7 @@ _assemble_line(FILE *f, char *buffer, int buf_len)
 	     * Check for backslash by scanning back from the end of
 	     * the entered line, the '\n' has been included since
 	     * normally a line is terminated with this
-	     * character. fgets() should only return one though!
+	     * character.
 	     */
 
 	    s += strlen(s);
@@ -358,11 +385,20 @@ _assemble_line(FILE *f, char *buffer, int buf_len)
 	    /* check if it ends with a backslash */
 	    if (*s == '\\') {
 		*s = '\0';              /* truncate the line here */
-		used += strlen(os);
+		if (add(buffer, buffersize, os, end - os)) {
+		    used = -1;
+		    free(p);
+		    break;
+		}
+		used = 1;
 		p = s;                  /* there is more ... */
 	    } else {
 		/* End of the line! */
-		used += strlen(os);
+		if (add(buffer, buffersize, os, end - os))
+		    used = -1;
+		else
+		    used = 1;
+		free(p);
 		break;                  /* this is the complete line */
 	    }
 
@@ -370,6 +406,7 @@ _assemble_line(FILE *f, char *buffer, int buf_len)
 	    /* Nothing in this line */
 	    /* Don't move p         */
 	}
+	free(p);
     }
 
     return used;
@@ -378,7 +415,8 @@ _assemble_line(FILE *f, char *buffer, int buf_len)
 static int read_file(const pam_handle_t *pamh, const char*filename, char ***lines)
 {
     FILE *conf;
-    char buffer[BUF_SIZE];
+    char *buffer = NULL;
+    size_t n = 0;
 
     D(("Parsed file name is: %s", filename));
 
@@ -395,7 +433,7 @@ static int read_file(const pam_handle_t *pamh, const char*filename, char ***line
       return PAM_BUF_ERR;
     }
     (*lines)[i] = 0;
-    while (_assemble_line(conf, buffer, BUF_SIZE) > 0) {
+    while (_assemble_line(conf, &buffer, &n) > 0) {
       char **tmp = NULL;
       D(("Read line: %s", buffer));
       tmp = realloc(*lines, (++i + 1) * sizeof(char*));
@@ -403,7 +441,8 @@ static int read_file(const pam_handle_t *pamh, const char*filename, char ***line
 	pam_syslog(pamh, LOG_ERR, "Cannot allocate memory.");
 	(void) fclose(conf);
 	free_string_array(*lines);
-	pam_overwrite_array(buffer);
+	pam_overwrite_n(buffer, n);
+	free(buffer);
 	return PAM_BUF_ERR;
       }
       *lines = tmp;
@@ -412,14 +451,16 @@ static int read_file(const pam_handle_t *pamh, const char*filename, char ***line
         pam_syslog(pamh, LOG_ERR, "Cannot allocate memory.");
         (void) fclose(conf);
         free_string_array(*lines);
-        pam_overwrite_array(buffer);
+        pam_overwrite_n(buffer, n);
+	free(buffer);
         return PAM_BUF_ERR;
       }
       (*lines)[i] = 0;
     }
 
     (void) fclose(conf);
-    pam_overwrite_array(buffer);
+    pam_overwrite_n(buffer, n);
+    free(buffer);
     return PAM_SUCCESS;
 }
 #endif
