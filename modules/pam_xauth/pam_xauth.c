@@ -290,14 +290,17 @@ check_acl(pam_handle_t *pamh,
 		}
 	}
 	if (fp) {
-		char buf[LINE_MAX], *tmp;
+		char *tmp;
+		char *buf = NULL;
+		size_t n = 0;
+		ssize_t r;
 		/* Scan the file for a list of specs of users to "trust". */
-		while (fgets(buf, sizeof(buf), fp) != NULL) {
-			tmp = memchr(buf, '\r', sizeof(buf));
+		while ((r = pam_getline(&buf, &n, fp)) != -1) {
+			tmp = memchr(buf, '\r', r);
 			if (tmp != NULL) {
 				*tmp = '\0';
 			}
-			tmp = memchr(buf, '\n', sizeof(buf));
+			tmp = memchr(buf, '\n', r);
 			if (tmp != NULL) {
 				*tmp = '\0';
 			}
@@ -307,6 +310,7 @@ check_acl(pam_handle_t *pamh,
 						   "%s %s allowed by %s",
 						   other_user, sense, path);
 				}
+				free(buf);
 				fclose(fp);
 				free(path);
 				return PAM_SUCCESS;
@@ -317,6 +321,7 @@ check_acl(pam_handle_t *pamh,
 			pam_syslog(pamh, LOG_DEBUG, "%s not listed in %s",
 				   other_user, path);
 		}
+		free(buf);
 		fclose(fp);
 		free(path);
 		return PAM_PERM_DENIED;
