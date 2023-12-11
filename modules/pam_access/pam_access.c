@@ -419,7 +419,8 @@ static int
 login_access (pam_handle_t *pamh, struct login_info *item)
 {
     FILE   *fp;
-    char    line[BUFSIZ];
+    char   *line = NULL;
+    size_t  n = 0;
     char   *perm;		/* becomes permission field */
     char   *users;		/* becomes list of login names */
     char   *froms;		/* becomes list of terminals or hosts */
@@ -446,19 +447,15 @@ login_access (pam_handle_t *pamh, struct login_info *item)
      */
 
     if ((fp = fopen(item->config_file, "r"))!=NULL) {
-	while (!match && fgets(line, sizeof(line), fp)) {
+	while (!match && pam_getline(&line, &n, fp) != -1) {
 	    lineno++;
-	    if (line[end = strlen(line) - 1] != '\n') {
-		pam_syslog(pamh, LOG_ERR,
-                           "%s: line %d: missing newline or line too long",
-		           item->config_file, lineno);
-		continue;
-	    }
-	    if (line[0] == '#')
+	    if (line[0] == '\0' || line[0] == '#')
 		continue;			/* comment line */
 	    while (end > 0 && isspace((unsigned char)line[end - 1]))
 		end--;
-	    line[end] = 0;			/* strip trailing whitespace */
+	    end = strlen(line) - 1;
+	    if (line[end] == '\n')
+		line[end] = 0;			/* strip trailing whitespace */
 	    if (line[0] == 0)			/* skip blank lines */
 		continue;
 
@@ -494,6 +491,7 @@ login_access (pam_handle_t *pamh, struct login_info *item)
 				"from_match=%d, \"%s\"", match, item->from);
 	    }
 	}
+	free(line);
 	(void) fclose(fp);
     } else if (errno == ENOENT) {
         /* This is no error.  */
