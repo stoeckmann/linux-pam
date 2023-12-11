@@ -40,6 +40,7 @@
 #define pam_modutil_getpwnam(h,n) getpwnam(n)
 #define pam_modutil_getspnam(h,n) getspnam(n)
 #define pam_syslog(h,a,b,c) helper_log_err(a,b,c)
+extern ssize_t pam_getline(char **buf, size_t *buflen, FILE *fp);
 #else
 #include <security/pam_modutil.h>
 #include <security/pam_ext.h>
@@ -624,8 +625,8 @@ save_old_password(pam_handle_t *pamh, const char *forwho, const char *oldpass,
 		  int howmany)
 #endif
 {
-    static char buf[16384];
-    static char nbuf[16384];
+    char *buf = NULL;
+    size_t bufsize = 0;
     char *s_luser, *s_uid, *s_npas, *s_pas, *pass;
     int npas;
     FILE *pwfile, *opwfile;
@@ -701,7 +702,7 @@ save_old_password(pam_handle_t *pamh, const char *forwho, const char *oldpass,
 	goto done;
     }
 
-    while (fgets(buf, 16380, opwfile)) {
+    while (pam_getline(&buf, &bufsize, opwfile) != -1) {
 	if (!strncmp(buf, forwho, len) && strchr(":,\n", buf[len]) != NULL) {
 	    char *sptr = NULL;
 	    found = 1;
@@ -732,22 +733,25 @@ save_old_password(pam_handle_t *pamh, const char *forwho, const char *oldpass,
 		npas--;
 	    }
 	    pass = crypt_md5_wrapper(oldpass);
-	    if (s_pas == NULL)
-		snprintf(nbuf, sizeof(nbuf), "%s:%s:%d:%s\n",
-			 s_luser, s_uid, npas, pass);
-	    else
-		snprintf(nbuf, sizeof(nbuf),"%s:%s:%d:%s,%s\n",
-			 s_luser, s_uid, npas, s_pas, pass);
-	    _pam_delete(pass);
-	    if (fputs(nbuf, pwfile) < 0) {
-		err = 1;
-		break;
+	    if (s_pas == NULL) {
+		if (fprintf(pwfile, "%s:%s:%d:%s\n", s_luser, s_uid, npas, pass) < 0) {
+		    err = 1;
+		}
+	    } else {
+		if (fprintf(pwfile, "%s:%s:%d:%s,%s\n", s_luser, s_uid, npas, s_pas, pass) < 0) {
+		    err = 1;
+		}
 	    }
+	    _pam_delete(pass);
+	    if (err == 1)
+		break;
 	} else if (fputs(buf, pwfile) < 0) {
 	    err = 1;
 	    break;
 	}
     }
+    _pam_drop(buf);
+    bufsize = 0;
     fclose(opwfile);
 
     if (!found) {
@@ -756,12 +760,11 @@ save_old_password(pam_handle_t *pamh, const char *forwho, const char *oldpass,
 	    err = 1;
 	} else {
 	    pass = crypt_md5_wrapper(oldpass);
-	    snprintf(nbuf, sizeof(nbuf), "%s:%lu:1:%s\n",
-		     forwho, (unsigned long)pwd->pw_uid, pass);
-	    _pam_delete(pass);
-	    if (fputs(nbuf, pwfile) < 0) {
+	    if (fprintf(pwfile, "%s:%lu:1:%s\n",
+		     forwho, (unsigned long)pwd->pw_uid, pass) < 0) {
 		err = 1;
 	    }
+	    _pam_delete(pass);
 	}
     }
 

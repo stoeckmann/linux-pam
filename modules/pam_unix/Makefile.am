@@ -53,13 +53,13 @@ bigcrypt_CFLAGS = $(AM_CFLAGS)
 bigcrypt_LDADD = @LIBCRYPT@
 
 unix_chkpwd_SOURCES = unix_chkpwd.c md5_good.c md5_broken.c bigcrypt.c \
-	passverify.c
+	passverify.c pam_getline.c
 unix_chkpwd_CFLAGS = $(AM_CFLAGS) @EXE_CFLAGS@ -DHELPER_COMPILE=\"unix_chkpwd\"
 unix_chkpwd_LDFLAGS = @EXE_LDFLAGS@
 unix_chkpwd_LDADD = @LIBCRYPT@ @LIBSELINUX@ @LIBAUDIT@
 
 unix_update_SOURCES = unix_update.c md5_good.c md5_broken.c bigcrypt.c \
-	passverify.c
+	passverify.c pam_getline.c
 unix_update_CFLAGS = $(AM_CFLAGS) @EXE_CFLAGS@ -DHELPER_COMPILE=\"unix_update\"
 unix_update_LDFLAGS = @EXE_LDFLAGS@
 unix_update_LDADD = @LIBCRYPT@ @LIBSELINUX@

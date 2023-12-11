@@ -339,7 +339,8 @@ static int _unix_run_update_binary(pam_handle_t *pamh, unsigned long long ctrl, 
 
 static int check_old_password(const char *forwho, const char *newpass)
 {
-	static char buf[16384];
+	char *buf = NULL;
+	size_t n = 0;
 	char *s_pas;
 	int retval = PAM_SUCCESS;
 	FILE *opwfile;
@@ -349,7 +350,7 @@ static int check_old_password(const char *forwho, const char *newpass)
 	if (opwfile == NULL)
 		return PAM_ABORT;
 
-	while (fgets(buf, 16380, opwfile)) {
+	while (pam_getline(&buf, &n, opwfile) != -1) {
 		if (!strncmp(buf, forwho, len) && (buf[len] == ':' ||
 			buf[len] == ',')) {
 			char *sptr;
@@ -371,6 +372,7 @@ static int check_old_password(const char *forwho, const char *newpass)
 			break;
 		}
 	}
+	free(buf);
 	fclose(opwfile);
 
 	return retval;
