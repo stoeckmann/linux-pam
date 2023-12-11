@@ -395,10 +395,11 @@ static rlim_t str2rlim_t(char *value) {
 
 static void parse_kernel_limits(pam_handle_t *pamh, struct pam_limit_s *pl, int ctrl)
 {
-    int i, maxlen = 0;
+    int i;
     FILE *limitsfile;
     const char *proclimits = "/proc/1/limits";
-    char line[256];
+    char *line = NULL;
+    size_t maxlen = 0, n = 0;
     char *hard, *soft, *name;
 
     if (!(limitsfile = fopen(proclimits, "r"))) {
@@ -406,8 +407,8 @@ static void parse_kernel_limits(pam_handle_t *pamh, struct pam_limit_s *pl, int 
         return;
     }
 
-    while (fgets(line, 256, limitsfile)) {
-        int pos = strlen(line);
+    while (pam_getline(&line, &n, limitsfile) != -1) {
+        size_t pos = strlen(line);
         if (pos < 2) continue;
 
         /* drop trailing newline */
