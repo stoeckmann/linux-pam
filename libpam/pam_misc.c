@@ -40,6 +40,7 @@
 #include <limits.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <syslog.h>
@@ -166,14 +167,14 @@ char *_pam_memdup(const char *x, int len)
 
 int _pam_mkargv(const char *s, char ***argv, int *argc)
 {
-    int l;
+    size_t l;
     int argvlen = 0;
     char *sbuf, *sbuf_start;
     char **our_argv = NULL;
     char **argvbuf;
     char *argvbufp;
 #ifdef PAM_DEBUG
-    int count=0;
+    unsigned count=0;
 #endif
 
     D(("called: %s",s));
@@ -188,6 +189,11 @@ int _pam_mkargv(const char *s, char ***argv, int *argc)
 	    D(("arg NULL"));
 	} else {
 	    /* Overkill on the malloc, but not large */
+	    if (l >= SIZE_MAX / ((sizeof(char)) + sizeof(char *))) {
+		pam_syslog(NULL, LOG_CRIT, "pam_mkargv: out of memory");
+		argvlen = 0;
+		goto cleanup;
+	    }
 	    argvlen = (l + 1) * ((sizeof(char)) + sizeof(char *));
 	    if ((our_argv = argvbuf = malloc(argvlen)) == NULL) {
 		pam_syslog(NULL, LOG_CRIT,
@@ -199,19 +205,27 @@ int _pam_mkargv(const char *s, char ***argv, int *argc)
 		argvbufp = (char *) argvbuf + (l * sizeof(char *));
 		D(("[%s]",sbuf));
 		while ((sbuf = _pam_StrTok(sbuf, " \n\t", &tmp))) {
-		    D(("arg #%d",++count));
+		    D(("arg #%u",++count));
 		    D(("->[%s]",sbuf));
 		    strcpy(argvbufp, sbuf);
 		    D(("copied token"));
 		    *argvbuf = argvbufp;
 		    argvbufp += strlen(argvbufp) + 1;
 		    D(("stepped in argvbufp"));
+		    if (*argc == INT_MAX) {
+			pam_syslog(NULL, LOG_CRIT,
+				   "pam_mkargv: too many arguments");
+			argvlen = 0;
+			_pam_drop(our_argv);
+			goto cleanup;
+		    }
 		    (*argc)++;
 		    argvbuf++;
 		    sbuf = NULL;
 		    D(("loop again?"));
 		}
 	    }
+cleanup:
 	    _pam_drop(sbuf_start);
 	}
     }
