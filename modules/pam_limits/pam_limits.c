@@ -509,14 +509,15 @@ static int init_limits(pam_handle_t *pamh, struct pam_limit_s *pl, int ctrl)
 static int
 value_from_file(const char *pathname, rlim_t *valuep)
 {
-    char buf[128];
+    char *buf = NULL;
+    size_t n = 0;
     FILE *fp;
     int retval;
 
     retval = 0;
 
     if ((fp = fopen(pathname, "r")) != NULL) {
-	if (fgets(buf, sizeof(buf), fp) != NULL) {
+	if (pam_getline(&buf, &n, fp) != -1) {
 	    char *endptr;
 	    unsigned long long value;
 
@@ -529,7 +530,7 @@ value_from_file(const char *pathname, rlim_t *valuep)
 		retval = 1;
 	    }
 	}
-
+	free(buf);
 	fclose(fp);
     }
 
@@ -823,7 +824,8 @@ parse_config_file(pam_handle_t *pamh, const char *uname, uid_t uid, gid_t gid,
 		  int ctrl, struct pam_limit_s *pl, const int conf_file_set_by_user)
 {
     FILE *fil;
-    char buf[LINE_LENGTH];
+    char *buf = NULL;
+    size_t n = 0;
 
     /* check for the conf_file */
     if (ctrl & PAM_DEBUG_ARG)
@@ -840,7 +842,7 @@ parse_config_file(pam_handle_t *pamh, const char *uname, uid_t uid, gid_t gid,
     }
 
     /* start the show */
-    while (fgets(buf, LINE_LENGTH, fil) != NULL) {
+    while (pam_getline(&buf, &n, fil) != -1) {
         char domain[LINE_LENGTH];
         char ltype[LINE_LENGTH];
         char item[LINE_LENGTH];
@@ -870,7 +872,7 @@ parse_config_file(pam_handle_t *pamh, const char *uname, uid_t uid, gid_t gid,
 
 	domain[0] = ltype[0] = item[0] = value[0] = '\0';
 
-	i = sscanf(line,"%s%s%s%s", domain, ltype, item, value);
+	i = sscanf(line,"%1023s%1023s%1023s%1023s", domain, ltype, item, value);
 	D(("scanned line[%d]: domain[%s], ltype[%s], item[%s], value[%s]",
 	   i, domain, ltype, item, value));
 
@@ -1016,12 +1018,14 @@ parse_config_file(pam_handle_t *pamh, const char *uname, uid_t uid, gid_t gid,
 		    pam_syslog(pamh, LOG_DEBUG, "no limits for '%s'", uname);
 		}
 	    }
+	    free(buf);
 	    fclose(fil);
 	    return PAM_IGNORE;
         } else {
             pam_syslog(pamh, LOG_WARNING, "invalid line '%s' - skipped", line);
 	}
     }
+    free(buf);
     fclose(fil);
     return PAM_SUCCESS;
 }
