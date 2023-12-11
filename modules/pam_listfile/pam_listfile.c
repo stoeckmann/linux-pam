@@ -52,7 +52,8 @@ pam_sm_authenticate (pam_handle_t *pamh, int flags UNUSED,
     const void *void_citemp;
     const char *citemp;
     char *ifname=NULL;
-    char aline[256];
+    char *aline=NULL;
+    size_t n=0;
     char mybuf[256],myval[256],apply_val[256];
     struct stat fileinfo;
     FILE *inf;
@@ -310,8 +311,7 @@ pam_sm_authenticate (pam_handle_t *pamh, int flags UNUSED,
     assert(PAM_SUCCESS == 0);
     assert(PAM_AUTH_ERR != 0);
 #endif
-    while((fgets(aline,sizeof(aline),inf) != NULL)
-	  && retval) {
+    while(pam_getline(&aline,&n,inf) != -1 && retval) {
 	const char *a = aline;
 
 	if(strlen(aline) == 0)
@@ -335,6 +335,7 @@ pam_sm_authenticate (pam_handle_t *pamh, int flags UNUSED,
 	}
     }
 
+    free(aline);
     fclose(inf);
     free(ifname);
     if ((sense && retval) || (!sense && !retval)) {
